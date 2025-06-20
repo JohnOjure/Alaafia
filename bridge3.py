@@ -12,7 +12,8 @@ designed the frontend for one thing and the next moment the backend code would h
 
 """
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response, UploadFile, File #type: ignore
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response, UploadFile, File, HTTPException, status #type: ignore
+from fastapi.middleware.cors import CORSMiddleware
 from twilio.twiml.voice_response import VoiceResponse, Connect, ConversationRelay #type: ignore
 from pinecone import Pinecone # type: ignore
 from pydantic import BaseModel #type: ignore
@@ -20,7 +21,7 @@ from PyPDF2 import PdfReader # type: ignore
 import os
 import json
 import time
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import asyncio 
 from dotenv import load_dotenv #type: ignore
 from datetime import datetime 
@@ -28,7 +29,7 @@ import get_response3
 
 load_dotenv()
 
-llm_url = os.getenv("llm_url") 
+model_name = os.getenv("model_name") 
 ngrok_url = os.getenv("ngrok_url")
 open_ai_key = os.getenv("open_ai_key")
 open_router_key = os.getenv("open_router_key")
@@ -37,6 +38,9 @@ pinecone_host = os.getenv("pinecone_host")
 eleven_labs_key = os.getenv("eleven_labs_key")
 twilio_sid = os.getenv("twilio_sid")
 twilio_auth_token = os.getenv("twilio_auth_token")
+
+print(f"OpenRouter Key: {'*'*10}{open_router_key[-4:] if open_router_key else 'MISSING'}")
+print(f"LLM URL: {model_name}")
 
 #dials
 index_name = "psi-index"
@@ -53,6 +57,15 @@ except Exception as e:
 
 
 app = FastAPI()
+
+# --- CORS Middleware (Crucial for frontend in different origin) ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins for development. CHANGE THIS FOR PRODUCTION!
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allows all headers
+)
 
 #conversation manager for Twilio and ConversationRelay vWebsockets
 class ConversationManager: 
@@ -147,6 +160,26 @@ class ReceiptDetails(BaseModel):
     service_items: List[str]
     clinic_name: str
     patient_name: str = None #patient name might not always be on receipt
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatRequest(BaseModel):
+    user_message: str
+    # conversation_history: List[ChatMessage] # You can send the full history
+    # Or keep it simpler by just sending user message and the backend manages full history
+    # For a simple HTTP endpoint, managing history per user will require a session ID
+    # or sending the entire history back and forth with each request.
+    # Let's start with passing full history, as get_response expects it.
+    conversation_history: Optional[List[Dict[str, str]]] = []
+
+
+class ChatResponse(BaseModel):
+    psi_response: str
+    # You might want to send back the updated conversation history here too
+    # updated_conversation_history: List[ChatMessage]
+
 
 manager = ConversationManager()
 
@@ -250,7 +283,7 @@ async def conversation_relay_websocket(websocket: WebSocket):
                         # u_input = transcribed_text,
                         # index_name = index_name,
                         use_rag = use_rag,
-                        llm_url = llm_url
+                        model_name = model_name
                     )
 
                     full_llm_response_intended = "" #to accumulate the full llm response for history
@@ -378,7 +411,7 @@ async def parse_receipt(file: UploadFile = File(...)):
         llm_extraction_result = await get_response3.get_llm_extracted_receipt_data(
             raw_text=extracted_text,
             llm_key=open_router_key, # Using your OpenRouter key for the LLM
-            llm_url=llm_url # Your OpenRouter base URL
+            model_name=model_name # Your OpenRouter base URL
         )
         
         if llm_extraction_result["status"] == "success":
@@ -512,5 +545,78 @@ async def check_fraud(
             "message": "Discrepancies found that may indicate a need for further review.",
             "discrepancies": discrepancies
         }
+
+@app.post("/api/chat", response_model=ChatResponse)
+async def chat_with_psi(request: ChatRequest):
+    """
+    Allows a user to chat with Psi (your AI assistant) via a standard HTTP POST request.
+    The frontend sends the current user message and the full conversation history.
+    Psi processes the request, potentially uses RAG or tools, and returns a complete text response.
+    """
+    user_message = request.user_message
+    conversation_history = request.conversation_history # Frontend sends the accumulated history
+
+    if not user_message.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User message cannot be empty."
+        )
+
+    # Add the current user message to the history for this turn's processing
+    # Note: get_response expects "user" and "assistant" roles.
+    # The history sent from frontend should already include the user's latest message.
+    # So, we just use the history as provided by the frontend.
+    # Ensure the frontend correctly formats its history like:
+    # [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, {"role": "user", "content": "How are you?"}]
+
+    model_name = "gpt-4o" # You can make this configurable
+    use_rag = True if pc else False # Only use RAG if Pinecone is successfully initialized
+
+    full_psi_response = ""
+    try:
+        # get_response is an async generator. We need to iterate through it
+        # to get the full response since we're not using WebSockets.
+        # This means the API will wait until get_response yields its final output.
+        async for chunk in get_response3(
+            llm_key=open_router_key,
+            Pinecone=pc,
+            p_host=pinecone_host,
+            conversation_history=conversation_history, # Pass history as provided by frontend
+            use_rag=use_rag,
+            model_name=model_name
+        ):
+            if chunk["type"] == "text":
+                full_psi_response += chunk["token"]
+            elif chunk["type"] == "tool_call":
+                # If a tool call occurs, get_response handles it internally
+                # and makes a second LLM call. The final text will then follow.
+                # We can log this on the backend if needed.
+                print(f"Backend: Psi initiated tool call: {chunk['function_name']} with args: {chunk['arguments']}")
+            elif chunk["type"] == "error":
+                error_detail = chunk.get("message", "An unknown error occurred during Psi's response.")
+                print(f"Backend: Error from Psi's generation: {error_detail}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Psi encountered an error: {error_detail}"
+                )
+            elif chunk["type"] == "end":
+                # The generator signals completion
+                break
+    except HTTPException:
+        # Re-raise HTTPExceptions raised within the loop
+        raise
+    except Exception as e:
+        print(f"Unhandled error during Psi response generation: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected server error occurred: {e}"
+        )
+    # After getting the full response, return it
+    # The frontend will be responsible for adding this response to its history
+    return ChatResponse(psi_response=full_psi_response)
+
+    # After getting the full response, return it
+    # The frontend will be responsible for adding this response to its history
+   
 
 

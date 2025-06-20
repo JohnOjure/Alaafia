@@ -11,7 +11,7 @@ curacel_health_key = os.getenv("curacel_health_key")
 curacel_grow_key = os.getenv("curacel_grow_key")
 health_base_url = os.getenv("health_base_url")
 grow_base_url = os.getenv("grow_base_url")
-url = "https://openrouter.ai/api/v1/chat/completions"
+# url = "https://openrouter.ai/api/v1/chat/completions"
 
 #define the tools the LLM can use
 CURACEL_TOOLS = [
@@ -146,7 +146,6 @@ async def get_llm_extracted_receipt_data(raw_text: str, llm_key: str, llm_url: s
     try:
         llm_response_generator = communicate3.communicate(
             llm_key,
-            url, 
             messages,
             llm_url, 
             tools=extraction_tools,
@@ -351,15 +350,14 @@ def recommend_curacel_policy(insurance_type: str = "health", health_condition: s
         print(f"An unexpected error occurred during policy recommendation: {e}")
         return json.dumps({"status": "error", "message": f"An unexpected error occurred: {e}"})
 
-
-def get_response(llm_key, pc: Pinecone, p_host: str, conversation_history: List[Dict[str, str]], use_rag: bool, llm_url: str) -> Generator[str, None, None]:
+def get_response(llm_key: str, pc: Pinecone, p_host: str, conversation_history: List[Dict[str, str]], use_rag: bool, model_name: str) -> Generator[str, None, None]:
     """
-    generates a response from the LLM, potentially involving RAG and tool calls.
+    Generates a response from the LLM, potentially involving RAG and tool calls.
     Yields text tokens or handles tool execution.
     """
     current_user_input = conversation_history[-1]["content"]
     
-    messages_for_llm = list(conversation_history) # Make a mutable copy
+    messages_for_llm = list(conversation_history)  # Make a mutable copy
 
     # RAG Logic
     if use_rag and current_user_input.strip():
@@ -393,13 +391,12 @@ def get_response(llm_key, pc: Pinecone, p_host: str, conversation_history: List[
     
     llm_response_generator = communicate3.communicate(
         llm_key, 
-        "https://openrouter.ai/api/v1/chat/completions", # OpenRouter endpoint
         messages_for_llm, 
-        llm_url,
-        tools=CURACEL_TOOLS # Pass the defined tools to the LLM
+        model_name,
+        tools=CURACEL_TOOLS  # Pass the defined tools to the LLM
     )
 
-    full_llm_response_content = "" # To accumulate text response if any
+    full_llm_response_content = ""  # To accumulate text response if any
     tool_call_made = False
 
     try:
@@ -407,19 +404,19 @@ def get_response(llm_key, pc: Pinecone, p_host: str, conversation_history: List[
             if chunk["type"] == "text":
                 token = chunk["token"]
                 full_llm_response_content += token
-                yield token # Yield text tokens directly to main.py
+                yield token  # Yield text tokens directly to main.py
             elif chunk["type"] == "tool_call":
                 tool_call = chunk["tool_call"]
                 tool_call_made = True
                 
                 function_name = tool_call["function"]["name"]
-                arguments_str = tool_call["function"]["arguments"] # This is a JSON string
+                arguments_str = tool_call["function"]["arguments"]  # This is a JSON string
                 
                 print(f"LLM requested tool call: {function_name} with args: {arguments_str}")
 
                 try:
                     arguments = json.loads(arguments_str)
-                    tool_output = "" # Initialize tool_output
+                    tool_output = ""  # Initialize tool_output
 
                     if function_name == "file_health_claim":
                         # Extract arguments for file_health_claim
@@ -427,7 +424,7 @@ def get_response(llm_key, pc: Pinecone, p_host: str, conversation_history: List[
                         encounter_date = arguments.get("encounter_date")
                         enrollee_first_name = arguments.get("enrollee_first_name")
                         enrollee_last_name = arguments.get("enrollee_last_name")
-                        enrollee_insurance_no = arguments.get("enrollee_insurance_no") # Now extracting this
+                        enrollee_insurance_no = arguments.get("enrollee_insurance_no")
                         diagnoses_names = arguments.get("diagnoses_names", [])
                         service_items_descriptions = arguments.get("service_items_descriptions", [])
                         amount_billed = arguments.get("amount_billed", 0.0)
@@ -438,7 +435,7 @@ def get_response(llm_key, pc: Pinecone, p_host: str, conversation_history: List[
                             encounter_date=encounter_date,
                             enrollee_first_name=enrollee_first_name,
                             enrollee_last_name=enrollee_last_name,
-                            enrollee_insurance_no=enrollee_insurance_no, #pass to API call
+                            enrollee_insurance_no=enrollee_insurance_no,
                             diagnoses_names=diagnoses_names,
                             service_items_descriptions=service_items_descriptions,
                             amount_billed=amount_billed
@@ -470,10 +467,9 @@ def get_response(llm_key, pc: Pinecone, p_host: str, conversation_history: List[
                     # Make another LLM call to get a natural language response
                     second_llm_response_generator = communicate3.communicate(
                         llm_key,
-                        "https://openrouter.ai/api/v1/chat/completions",
-                        conversation_history, # Use the updated history
-                        llm_url,
-                        tools=CURACEL_TOOLS # Still pass tools in case of chained calls
+                        conversation_history,  # Use the updated history
+                        model_name,
+                        tools=CURACEL_TOOLS  # Still pass tools in case of chained calls
                     )
                     
                     second_full_response = ""
@@ -507,113 +503,111 @@ def get_response(llm_key, pc: Pinecone, p_host: str, conversation_history: List[
     if not tool_call_made and not full_llm_response_content:
         yield "I'm sorry, I didn't get a clear response. Can you please rephrase?"
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def get_response_1(llm_key, pc, p_host, conversation_history: List[Dict[str, str]], use_rag: bool, llm_url: str) -> Generator[str, None, None]:
-    current_user_input = conversation_history[-1]["content"]
-    context_message = {}
-    try:
-        if use_rag:
-            index = pc.Index(host=p_host)
-
-            results = index.search(
-                namespace="__default__", 
-                query={
-                    "inputs": {"text": f"{current_user_input}"}, 
-                    "top_k": 3
-                },
-                rerank={
-                    "model": "bge-reranker-v2-m3",
-                    "top_n": 2,
-                    "rank_fields": ["content"]
-                },
-                fields=["title", "content"]
-            )
-            
-            contents = [hit['fields']['content'] for hit in results['result']['hits']]
-            context_text = "\n\n".join(contents) #context from rag that the llm wil use to answer the question
-            
-            if context_text:
-                #create new context message to prepend/insert
-                context_message = {
-                    "role": "system",
-                    "content": f"Refer to the following context if relevant: {context_text}"
-                }
-
-            #prepare messages list for LLM API call
-            #start with the original system prompt from conversation history
-            messages_for_llm = [conversation_history[0]]  #the first message is the system prompt
-
-            #add the RAG context prompt (context_message) after the original system prompt
-            if context_message:
-                messages_for_llm.append(context_message)
-
-            #add the rest of the conversation history (excluding the first system prompt)
-            messages_for_llm.extend(conversation_history[1:])
-
-            # messages_for_llm = list(conversation_history) #convert the conversation history to a list
-            # original_system_prompt = messages_for_llm[0]["content"]
-            # messages_for_llm[0]["content"] = (
-            #     original_system_prompt + "\n\nIntegrate the following context into your response if relevant, but do not directly quote it unless necessary: " + context
-            # )  #don't new system prompt details keep getting added to the base system prompt every time inference is made??????????????????????????
-
-
-        else:
-            # context = None
-            messages_for_llm = list(conversation_history)
-        
-        return communicate3.communicate(
-            llm_key, 
-            "https://openrouter.ai/api/v1/chat/completions", 
-            messages_for_llm, 
-            llm_url
-        )
    
-    except Exception as e:
-        print(f"Error in get_response: {e}")
-        return f"Error: An issue occured retrieving information: {e}"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# def get_response_1(llm_key, pc, p_host, conversation_history: List[Dict[str, str]], use_rag: bool, llm_url: str) -> Generator[str, None, None]:
+#     current_user_input = conversation_history[-1]["content"]
+#     context_message = {}
+#     try:
+#         if use_rag:
+#             index = pc.Index(host=p_host)
+
+#             results = index.search(
+#                 namespace="__default__", 
+#                 query={
+#                     "inputs": {"text": f"{current_user_input}"}, 
+#                     "top_k": 3
+#                 },
+#                 rerank={
+#                     "model": "bge-reranker-v2-m3",
+#                     "top_n": 2,
+#                     "rank_fields": ["content"]
+#                 },
+#                 fields=["title", "content"]
+#             )
+            
+#             contents = [hit['fields']['content'] for hit in results['result']['hits']]
+#             context_text = "\n\n".join(contents) #context from rag that the llm wil use to answer the question
+            
+#             if context_text:
+#                 #create new context message to prepend/insert
+#                 context_message = {
+#                     "role": "system",
+#                     "content": f"Refer to the following context if relevant: {context_text}"
+#                 }
+
+#             #prepare messages list for LLM API call
+#             #start with the original system prompt from conversation history
+#             messages_for_llm = [conversation_history[0]]  #the first message is the system prompt
+
+#             #add the RAG context prompt (context_message) after the original system prompt
+#             if context_message:
+#                 messages_for_llm.append(context_message)
+
+#             #add the rest of the conversation history (excluding the first system prompt)
+#             messages_for_llm.extend(conversation_history[1:])
+
+#             # messages_for_llm = list(conversation_history) #convert the conversation history to a list
+#             # original_system_prompt = messages_for_llm[0]["content"]
+#             # messages_for_llm[0]["content"] = (
+#             #     original_system_prompt + "\n\nIntegrate the following context into your response if relevant, but do not directly quote it unless necessary: " + context
+#             # )  #don't new system prompt details keep getting added to the base system prompt every time inference is made??????????????????????????
+
+
+#         else:
+#             # context = None
+#             messages_for_llm = list(conversation_history)
+        
+#         return communicate3.communicate(
+#             llm_key, 
+#             "https://openrouter.ai/api/v1/chat/completions", 
+#             messages_for_llm, 
+#             llm_url
+#         )
+   
+#     except Exception as e:
+#         print(f"Error in get_response: {e}")
+#         return f"Error: An issue occured retrieving information: {e}"
 
 
 #get_response.py uses communicate.py and returns the complete llm response to the user input.
