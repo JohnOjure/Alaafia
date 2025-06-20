@@ -353,7 +353,8 @@ async def conversation_relay_websocket(websocket: WebSocket):
         except Exception as send_e:
             print(f"Failed to send critical error message to Twilio: {send_e}")
 
-@app.post("/parse-receipt") #endpoint to parse and extract receipt data
+#INTERACTS WITH THE WEB APP
+@app.post("/parse-receipt") #endpoint to parse and extract receipt data 
 async def parse_receipt(file: UploadFile = File(...)):
     """
     Parses an uploaded PDF receipt to extract relevant medical claim information
@@ -397,6 +398,7 @@ async def parse_receipt(file: UploadFile = File(...)):
         print(f"Error processing PDF or during LLM extraction: {e}")
         return {"status": "error", "message": f"An unexpected error occurred during PDF processing: {e}"}
 
+#INTERACTS WITH THE WEB APP
 @app.post("/check-fraud") #endpoint for fraud shield
 async def check_fraud(
     claim: ClaimDetails,
