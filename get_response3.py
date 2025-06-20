@@ -5,11 +5,13 @@ import os
 from pinecone import Pinecone #type: ignore
 from typing import List, Dict, Any, Generator
 import uuid 
+import asyncio
 
 curacel_health_key = os.getenv("curacel_health_key")
 curacel_grow_key = os.getenv("curacel_grow_key")
 health_base_url = os.getenv("health_base_url")
 grow_base_url = os.getenv("grow_base_url")
+url = "https://openrouter.ai/api/v1/chat/completions"
 
 #define the tools the LLM can use
 CURACEL_TOOLS = [
@@ -84,8 +86,97 @@ CURACEL_TOOLS = [
                 "required": [] #no hard requirements, LLM can try to infer
             }
         }
+    },{
+        "type": "function",
+        "function": {
+            "name": "extract_receipt_data",
+            "description": "Extracts structured medical claim information (like date, total amount, service items, clinic name, patient name) from unstructured text, typically from a scanned receipt or document.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "receipt_date": {
+                        "type": "string",
+                        "description": "The date of service or purchase on the receipt, in YYYY-MM-DD format. If only month/day/year are available, infer the current year or the most likely recent year."
+                    },
+                    "total_amount": {
+                        "type": "number",
+                        "description": "The total monetary amount billed on the receipt."
+                    },
+                    "currency": {
+                        "type": "string",
+                        "description": "The currency of the total amount, e.g., 'NGN', 'USD', 'EUR'."
+                    },
+                    "service_items": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "A list of individual services, medications, or items detailed on the receipt. Each item should be a brief description."
+                    },
+                    "clinic_name": {
+                        "type": "string",
+                        "description": "The name of the clinic, hospital, or pharmacy that issued the receipt."
+                    },
+                    "patient_name": {
+                        "type": "string",
+                        "description": "The name of the patient (if mentioned) on the receipt."
+                    }
+                },
+                "required": ["receipt_date", "total_amount", "currency", "service_items", "clinic_name"]   
+            }
+        }
     }
 ]
+
+async def get_llm_extracted_receipt_data(raw_text: str, llm_key: str, llm_url: str) -> Dict[str, Any]:
+    """
+    Uses the LLM's tool-calling capability to extract structured data from raw text.
+    """
+    if not llm_key or not llm_url:
+        return {"status": "error", "message": "LLM key or URL not configured for extraction."}
+
+    #define a temporary tool set containing only the extraction tool
+    extraction_tools = [
+        next(tool for tool in CURACEL_TOOLS if tool["function"]["name"] == "extract_receipt_data")
+    ]
+
+    messages = [
+        {"role": "system", "content": "You are a highly skilled data extraction assistant. Your task is to accurately extract specified information from the provided text using the `extract_receipt_data` tool. Do not generate any conversational text; only call the tool with the extracted data. If a piece of information is explicitly not found, omit it from the tool call or use a placeholder like 'N/A' if required by the schema."},
+        {"role": "user", "content": f"Please extract the medical receipt data from the following text:\n\n{raw_text}\n\nStrictly use the `extract_receipt_data` tool for this."}
+    ]
+
+    try:
+        llm_response_generator = communicate3.communicate(
+            llm_key,
+            url, 
+            messages,
+            llm_url, 
+            tools=extraction_tools,
+            tool_choice="auto" #ensure LLM prefers to use a tool if applicable
+        )
+
+        #iterate through the generator to find the tool call
+        for chunk in llm_response_generator:
+            if chunk["type"] == "tool_call":
+                tool_call = chunk["tool_call"]
+                if tool_call["function"]["name"] == "extract_receipt_data":
+                    try:
+                        extracted_args = json.loads(tool_call["function"]["arguments"])
+                        return {"status": "success", "extracted_data": extracted_args}
+                    except json.JSONDecodeError:
+                        return {"status": "error", "message": "LLM returned invalid JSON for tool arguments."}
+                else:
+                    return {"status": "error", "message": f"LLM called unexpected tool: {tool_call['function']['name']}"}
+            elif chunk["type"] == "text" and chunk["token"].strip():
+                #if LLM returns text instead of tool call, it means it couldn't extract
+                print(f"LLM returned text instead of tool call: {chunk['token']}")
+                return {"status": "error", "message": f"LLM could not extract data from the receipt. Raw LLM response: {chunk['token']}"}
+        
+        #if the generator finishes without yielding a tool_call
+        return {"status": "error", "message": "LLM did not return a tool call for receipt data extraction."}
+
+    except Exception as e:
+        print(f"Error during LLM receipt data extraction: {e}")
+        return {"status": "error", "message": f"An unexpected error occurred during LLM extraction: {e}"}
+
 
 #Curacel API calling functions
 def file_health_claim(
@@ -259,6 +350,7 @@ def recommend_curacel_policy(insurance_type: str = "health", health_condition: s
     except Exception as e:
         print(f"An unexpected error occurred during policy recommendation: {e}")
         return json.dumps({"status": "error", "message": f"An unexpected error occurred: {e}"})
+
 
 def get_response(llm_key, pc: Pinecone, p_host: str, conversation_history: List[Dict[str, str]], use_rag: bool, llm_url: str) -> Generator[str, None, None]:
     """

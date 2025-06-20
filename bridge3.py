@@ -12,9 +12,10 @@ designed the frontend for one thing and the next moment the backend code would h
 
 """
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response #type: ignore
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response, UploadFile, File #type: ignore
 from twilio.twiml.voice_response import VoiceResponse, Connect, ConversationRelay #type: ignore
 from pinecone import Pinecone # type: ignore
+from PyPDF2 import PdfReader # type: ignore
 import os
 import json
 import time
@@ -327,3 +328,47 @@ async def conversation_relay_websocket(websocket: WebSocket):
             await manager.send_llm_token_to_twilio(call_sid, "I'm sorry, I've encountered a critical error. Please try calling again.", last = True)
         except Exception as send_e:
             print(f"Failed to send critical error message to Twilio: {send_e}")
+
+@app.post("/parse-receipt")
+async def parse_receipt(file: UploadFile = File(...)):
+    """
+    Parses an uploaded PDF receipt to extract relevant medical claim information
+    using LLM-powered extraction.
+    """
+    if file.content_type != "application/pdf":
+        return {"status": "error", "message": "Only PDF files are accepted."}
+
+    extracted_text = ""
+    try:
+        # from PyPDF2 import PdfReader
+        reader = PdfReader(file.file)
+        for page in reader.pages:
+            extracted_text += page.extract_text() or ""
+        
+        if not extracted_text.strip():
+            return {"status": "error", "message": "Could not extract any text from the PDF."}
+
+        # --- Use LLM for Data Extraction ---
+        # Call the new asynchronous helper function from get_response3.py
+        llm_extraction_result = await get_response3.get_llm_extracted_receipt_data(
+            raw_text=extracted_text,
+            llm_key=open_router_key, # Using your OpenRouter key for the LLM
+            llm_url=llm_url # Your OpenRouter base URL
+        )
+        
+        if llm_extraction_result["status"] == "success":
+            return {
+                "status": "success",
+                "message": "Receipt parsed and data extracted by AI successfully.",
+                "extracted_data": llm_extraction_result["extracted_data"]
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"AI extraction failed: {llm_extraction_result['message']}",
+                "raw_text": extracted_text # Optionally return raw text for debugging
+            }
+
+    except Exception as e:
+        print(f"Error processing PDF or during LLM extraction: {e}")
+        return {"status": "error", "message": f"An unexpected error occurred during PDF processing: {e}"}
