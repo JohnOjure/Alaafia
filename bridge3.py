@@ -15,6 +15,7 @@ designed the frontend for one thing and the next moment the backend code would h
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response, UploadFile, File #type: ignore
 from twilio.twiml.voice_response import VoiceResponse, Connect, ConversationRelay #type: ignore
 from pinecone import Pinecone # type: ignore
+from pydantic import BaseModel #type: ignore
 from PyPDF2 import PdfReader # type: ignore
 import os
 import json
@@ -22,6 +23,7 @@ import time
 from typing import Dict, List, Any
 import asyncio 
 from dotenv import load_dotenv #type: ignore
+from datetime import datetime 
 import get_response3
 
 load_dotenv()
@@ -40,7 +42,7 @@ twilio_auth_token = os.getenv("twilio_auth_token")
 index_name = "psi-index"
 voice_id = os.getenv("voice_id") 
 tts_model = "eleven_turbo_v2_5"
-use_rag = True
+use_rag = False
 
 
 try:
@@ -123,6 +125,28 @@ class ConversationManager:
             return self.interruption_events[call_sid].is_set() #returns True if the interruption flag is set, False otherwise
         return False
 
+#define the expected structure of data from a filed claim (or user input for claim)
+class ClaimDetails(BaseModel):
+    claim_description: str
+    encounter_date: str # YYYY-MM-DD
+    enrollee_first_name: str
+    enrollee_last_name: str
+    enrollee_insurance_no: str
+    diagnoses_names: List[str] = []
+    service_items_descriptions: List[str] = []
+    amount_billed: float = 0.0
+    # Add an optional field if clinic name is usually extracted from chat/user input
+    clinic_name_from_chat: str = None
+
+#define the expected structure of data extracted from a receipt
+class ReceiptDetails(BaseModel):
+    raw_text: str
+    receipt_date: str # YYYY-MM-DD
+    total_amount: float
+    currency: str
+    service_items: List[str]
+    clinic_name: str
+    patient_name: str = None #patient name might not always be on receipt
 
 manager = ConversationManager()
 
@@ -329,7 +353,7 @@ async def conversation_relay_websocket(websocket: WebSocket):
         except Exception as send_e:
             print(f"Failed to send critical error message to Twilio: {send_e}")
 
-@app.post("/parse-receipt")
+@app.post("/parse-receipt") #endpoint to parse and extract receipt data
 async def parse_receipt(file: UploadFile = File(...)):
     """
     Parses an uploaded PDF receipt to extract relevant medical claim information
@@ -372,3 +396,119 @@ async def parse_receipt(file: UploadFile = File(...)):
     except Exception as e:
         print(f"Error processing PDF or during LLM extraction: {e}")
         return {"status": "error", "message": f"An unexpected error occurred during PDF processing: {e}"}
+
+@app.post("/check-fraud") #endpoint for fraud shield
+async def check_fraud(
+    claim: ClaimDetails,
+    receipt: ReceiptDetails
+):
+    """
+    Compares details from a filed claim (or user input) with extracted receipt data
+    to identify potential inconsistencies (fraud indicators).
+    """
+    discrepancies = []
+
+    # 1. Date Comparison
+    try:
+        claim_date_dt = datetime.strptime(claim.encounter_date, "%Y-%m-%d")
+        receipt_date_dt = datetime.strptime(receipt.receipt_date, "%Y-%m-%d")
+
+        #allow for a small discrepancy (e.g., within 3 days)
+        date_tolerance_days = 3 
+        date_difference = abs((claim_date_dt - receipt_date_dt).days)
+
+        if date_difference > date_tolerance_days:
+            discrepancies.append({
+                "type": "Date Mismatch",
+                "message": (f"Claim date ({claim.encounter_date}) differs significantly "
+                            f"from receipt date ({receipt.receipt_date}). Difference: {date_difference} days."),
+                "severity": "High"
+            })
+    except ValueError as e:
+        discrepancies.append({
+            "type": "Date Format Error",
+            "message": f"Could not parse date: {e}. Ensure YYYY-MM-DD format.",
+            "severity": "Error"
+        })
+
+    # 2. Amount Comparison
+    #allow for a percentage tolerance (e.g., 5% difference)
+    amount_tolerance_percent = 5.0
+    if claim.amount_billed > 0 and receipt.total_amount > 0:
+        difference = abs(claim.amount_billed - receipt.total_amount)
+        if claim.amount_billed != 0: 
+            percentage_difference = (difference / claim.amount_billed) * 100
+            if percentage_difference > amount_tolerance_percent:
+                discrepancies.append({
+                    "type": "Amount Mismatch",
+                    "message": (f"Claim amount (₦{claim.amount_billed:,.2f}) differs significantly "
+                                f"from receipt total (₦{receipt.total_amount:,.2f}). "
+                                f"Difference: {percentage_difference:.2f}%"),
+                    "severity": "Medium"
+                })
+        else: #claim amount is 0, but receipt has an amount
+             if receipt.total_amount > 0:
+                 discrepancies.append({
+                    "type": "Amount Mismatch",
+                    "message": (f"Claim amount is ₦0.00, but receipt shows ₦{receipt.total_amount:,.2f}. "
+                                "Possible missing claim amount."),
+                    "severity": "Medium"
+                })
+
+
+    # 3. Clinic Name Comparison (Basic string matching for MVP)
+    #this is a simple exact match. For a real system, you'd use fuzzy matching
+    #libraries (like 'fuzzywuzzy' or 'rapidfuzz') for variations like "Faith Clinic Inc." vs "Faith Clinic".
+    if claim.clinic_name_from_chat and receipt.clinic_name:
+        if claim.clinic_name_from_chat.lower() != receipt.clinic_name.lower():
+            discrepancies.append({
+                "type": "Clinic Name Mismatch",
+                "message": (f"Clinic name from claim/chat ('{claim.clinic_name_from_chat}') "
+                            f"does not match receipt ('{receipt.clinic_name}')."),
+                "severity": "Low" # Can be elevated based on confidence
+            })
+    elif claim.clinic_name_from_chat and not receipt.clinic_name:
+         discrepancies.append({
+                "type": "Clinic Name Missing on Receipt",
+                "message": f"Clinic name '{claim.clinic_name_from_chat}' mentioned in chat, but not found on receipt.",
+                "severity": "Low"
+            })
+    elif not claim.clinic_name_from_chat and receipt.clinic_name:
+         discrepancies.append({
+                "type": "Clinic Name Missing in Chat",
+                "message": f"Clinic name '{receipt.clinic_name}' found on receipt, but not mentioned in chat.",
+                "severity": "Low"
+            })
+
+    # 4. Service Items Comparison (Conceptual for MVP)
+    # This is complex and would involve NLP similarity or matching against a known service list.
+    # For MVP, we can just note if either is empty when the other is not.
+    if claim.service_items_descriptions and not receipt.service_items:
+        discrepancies.append({
+            "type": "Service Items Mismatch",
+            "message": "Service items specified in claim/chat but not found on receipt.",
+            "severity": "Low"
+        })
+    elif not claim.service_items_descriptions and receipt.service_items:
+        discrepancies.append({
+            "type": "Service Items Mismatch",
+            "message": "Service items found on receipt but not specified in claim/chat.",
+            "severity": "Low"
+        })
+    # More advanced: Check for overlap or significant differences in actual item descriptions
+    # For instance: If "malaria test" is in claim services, is "malaria test" or similar in receipt services?
+    # This would require more sophisticated string/semantic similarity algorithms.
+
+    if not discrepancies:
+        return {
+            "status": "success",
+            "message": "No significant discrepancies found between claim and receipt data."
+        }
+    else:
+        return {
+            "status": "warning",
+            "message": "Discrepancies found that may indicate a need for further review.",
+            "discrepancies": discrepancies
+        }
+
+
