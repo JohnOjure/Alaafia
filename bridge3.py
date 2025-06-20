@@ -5,6 +5,11 @@ buh if you have any questions, lemme know.
 
 This file binds everything together and wraps the logic in an API
 
+[❗❗❗❗❗ To the frontend gang, alot of changes are still going on so link the
+frontend to this backend at your own risk ❗❗❗❗❗
+❗Lol, not at your own risk buh be careful and cautious cos you may have
+designed the frontend for one thing and the next moment the backend code would have changed completely❗]
+
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response #type: ignore
