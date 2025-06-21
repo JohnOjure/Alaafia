@@ -29,7 +29,7 @@ import get_response3
 
 load_dotenv()
 
-model_name = os.getenv("model_name") 
+model_name = os.getenv("model_name")
 ngrok_url = os.getenv("ngrok_url")
 open_ai_key = os.getenv("open_ai_key")
 open_router_key = os.getenv("open_router_key")
@@ -569,7 +569,7 @@ async def chat_with_psi(request: ChatRequest):
     # Ensure the frontend correctly formats its history like:
     # [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, {"role": "user", "content": "How are you?"}]
 
-    model_name = "gpt-4o" # You can make this configurable
+    # model_name = "gpt-4o"
     use_rag = True if pc else False # Only use RAG if Pinecone is successfully initialized
 
     full_psi_response = ""
@@ -577,7 +577,7 @@ async def chat_with_psi(request: ChatRequest):
         # get_response is an async generator. We need to iterate through it
         # to get the full response since we're not using WebSockets.
         # This means the API will wait until get_response yields its final output.
-        async for chunk in get_response3(
+        async for chunk in get_response3.get_response(
             llm_key=open_router_key,
             Pinecone=pc,
             p_host=pinecone_host,

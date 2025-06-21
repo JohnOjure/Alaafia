@@ -6,12 +6,23 @@ from pinecone import Pinecone #type: ignore
 from typing import List, Dict, Any, Generator
 import uuid 
 import asyncio
+import json
+from typing import List, Dict, AsyncGenerator
+import communicate3
+from pinecone import Pinecone 
+
+# Assuming these are defined elsewhere and correctly imported
+# from pinecone import Pinecone 
+# from . import communicate3 
+# from .tools import CURACEL_TOOLS, file_health_claim, recommend_curacel_policy
 
 curacel_health_key = os.getenv("curacel_health_key")
 curacel_grow_key = os.getenv("curacel_grow_key")
 health_base_url = os.getenv("health_base_url")
 grow_base_url = os.getenv("grow_base_url")
 # url = "https://openrouter.ai/api/v1/chat/completions"
+
+#
 
 #define the tools the LLM can use
 CURACEL_TOOLS = [
@@ -350,16 +361,16 @@ def recommend_curacel_policy(insurance_type: str = "health", health_condition: s
         print(f"An unexpected error occurred during policy recommendation: {e}")
         return json.dumps({"status": "error", "message": f"An unexpected error occurred: {e}"})
 
-def get_response(llm_key: str, pc: Pinecone, p_host: str, conversation_history: List[Dict[str, str]], use_rag: bool, model_name: str) -> Generator[str, None, None]:
+
+async def get_response(llm_key: str, pc: Pinecone, p_host: str, conversation_history: List[Dict[str, str]], use_rag: bool, model_name: str) -> AsyncGenerator[Dict, None]:
     """
     Generates a response from the LLM, potentially involving RAG and tool calls.
-    Yields text tokens or handles tool execution.
+    Yields dictionary chunks (text, tool_call, error, end).
     """
     current_user_input = conversation_history[-1]["content"]
-    
-    messages_for_llm = list(conversation_history)  # Make a mutable copy
+    messages_for_llm = list(conversation_history)
 
-    # RAG Logic
+    # RAG Logic (omitted for brevity, assume it's correct from previous versions)
     if use_rag and current_user_input.strip():
         try:
             index = pc.Index(host=p_host)
@@ -376,50 +387,50 @@ def get_response(llm_key: str, pc: Pinecone, p_host: str, conversation_history: 
                 },
                 fields=["title", "content"]
             )
-            
+
             contents = [hit['fields']['content'] for hit in results['result']['hits']]
             context_text = "\n\n".join(contents)
-            
+
             if context_text:
                 rag_context_message = {
                     "role": "system",
                     "content": f"Refer to the following context if relevant to the user's query: {context_text}"
                 }
-                messages_for_llm.insert(1, rag_context_message)
+                messages_for_llm.insert(0, rag_context_message)
         except Exception as e:
             print(f"Error during Pinecone RAG search: {e}")
-    
-    llm_response_generator = communicate3.communicate(
-        llm_key, 
-        messages_for_llm, 
+
+    # Now, communicate3.communicate will refer to your actual module's function
+    llm_response_generator = communicate3.communicate( # This line remains the same
+        llm_key,
+        messages_for_llm,
         model_name,
-        tools=CURACEL_TOOLS  # Pass the defined tools to the LLM
+        tools=CURACEL_TOOLS
     )
 
-    full_llm_response_content = ""  # To accumulate text response if any
+    full_llm_response_content = ""
     tool_call_made = False
 
     try:
-        for chunk in llm_response_generator:
+        async for chunk in llm_response_generator: # This will now iterate over your actual LLM stream
             if chunk["type"] == "text":
                 token = chunk["token"]
                 full_llm_response_content += token
-                yield token  # Yield text tokens directly to main.py
+                yield {"type": "text", "token": token}
             elif chunk["type"] == "tool_call":
                 tool_call = chunk["tool_call"]
                 tool_call_made = True
-                
+
                 function_name = tool_call["function"]["name"]
-                arguments_str = tool_call["function"]["arguments"]  # This is a JSON string
-                
+                arguments_str = tool_call["function"]["arguments"]
+
                 print(f"LLM requested tool call: {function_name} with args: {arguments_str}")
 
                 try:
                     arguments = json.loads(arguments_str)
-                    tool_output = ""  # Initialize tool_output
+                    tool_output = ""
 
                     if function_name == "file_health_claim":
-                        # Extract arguments for file_health_claim
                         claim_description = arguments.get("claim_description")
                         encounter_date = arguments.get("encounter_date")
                         enrollee_first_name = arguments.get("enrollee_first_name")
@@ -429,7 +440,6 @@ def get_response(llm_key: str, pc: Pinecone, p_host: str, conversation_history: 
                         service_items_descriptions = arguments.get("service_items_descriptions", [])
                         amount_billed = arguments.get("amount_billed", 0.0)
 
-                        # Call the actual API function
                         tool_output = file_health_claim(
                             claim_description=claim_description,
                             encounter_date=encounter_date,
@@ -440,14 +450,12 @@ def get_response(llm_key: str, pc: Pinecone, p_host: str, conversation_history: 
                             service_items_descriptions=service_items_descriptions,
                             amount_billed=amount_billed
                         )
-                        
+
                     elif function_name == "recommend_curacel_policy":
-                        # Extract arguments for recommend_curacel_policy
                         insurance_type = arguments.get("insurance_type")
                         health_condition = arguments.get("health_condition")
                         country = arguments.get("country")
 
-                        # Call the actual API function
                         tool_output = recommend_curacel_policy(
                             insurance_type=insurance_type,
                             health_condition=health_condition,
@@ -455,159 +463,58 @@ def get_response(llm_key: str, pc: Pinecone, p_host: str, conversation_history: 
                         )
                     else:
                         tool_output = json.dumps({"status": "error", "message": f"Unknown tool: {function_name}"})
-                        
-                    # Add tool call and tool output to conversation history
-                    conversation_history.append({
+
+                    messages_for_llm.append({
                         "role": "tool",
-                        "tool_call_id": tool_call["id"],
+                        "tool_call_id": tool_call.get("id", "no_id"),
                         "name": function_name,
                         "content": tool_output
                     })
-                    
-                    # Make another LLM call to get a natural language response
+
                     second_llm_response_generator = communicate3.communicate(
                         llm_key,
-                        conversation_history,  # Use the updated history
+                        messages_for_llm,
                         model_name,
-                        tools=CURACEL_TOOLS  # Still pass tools in case of chained calls
+                        tools=CURACEL_TOOLS
                     )
-                    
+
                     second_full_response = ""
-                    for second_chunk in second_llm_response_generator:
+                    async for second_chunk in second_llm_response_generator:
                         if second_chunk["type"] == "text":
                             second_token = second_chunk["token"]
                             second_full_response += second_token
-                            yield second_token
+                            yield {"type": "text", "token": second_token}
                         elif second_chunk["type"] == "tool_call":
                             print(f"Warning: Chained tool call detected: {second_chunk['tool_call']['function']['name']}. "
                                   "This project iteration handles only one level of tool calls for simplicity.")
-                            yield "I encountered a complex request and need to simplify. Can you rephrase?"
+                            yield {"type": "text", "token": "I encountered a complex request and need to simplify. Can you rephrase?"}
                             break
-                        
+
                     if second_full_response:
-                        conversation_history.append({"role": "assistant", "content": second_full_response})
-                    
-                    break
+                        messages_for_llm.append({"role": "assistant", "content": second_full_response})
+
+                    yield {"type": "end"}
+                    return
+
                 except json.JSONDecodeError:
-                    yield "Error: Failed to parse arguments for the tool call. Can you please provide the details clearly?"
-                    conversation_history.append({"role": "assistant", "content": "Error: Failed to parse arguments for the tool call. Can you please provide the details clearly?"})
-                    break
+                    yield {"type": "text", "token": "Error: Failed to parse arguments for the tool call. Can you please provide the details clearly?"}
+                    messages_for_llm.append({"role": "assistant", "content": "Error: Failed to parse arguments for the tool call. Can you please provide the details clearly?"})
+                    yield {"type": "end"}
+                    return
                 except Exception as ex:
-                    yield f"Error processing tool request: {ex}. Please try again or describe your issue in more detail."
-                    conversation_history.append({"role": "assistant", "content": f"Error processing tool request: {ex}. Please try again or describe your issue in more detail."})
-                    break
+                    yield {"type": "text", "token": f"Error processing tool request: {ex}. Please try again or describe your issue in more detail."}
+                    messages_for_llm.append({"role": "assistant", "content": f"Error processing tool request: {ex}. Please try again or describe your issue in more detail."})
+                    yield {"type": "end"}
+                    return
     except Exception as e:
         print(f"Error in get_response LLM streaming/tool handling: {e}")
-        yield f"Error: An issue occurred processing your request: {e}"
+        yield {"type": "error", "message": f"An issue occurred processing your request: {e}"}
+        yield {"type": "end"}
+        return
 
     if not tool_call_made and not full_llm_response_content:
-        yield "I'm sorry, I didn't get a clear response. Can you please rephrase?"
+        yield {"type": "text", "token": "I'm sorry, I didn't get a clear response. Can you please rephrase?"}
 
-   
+    yield {"type": "end"}
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# def get_response_1(llm_key, pc, p_host, conversation_history: List[Dict[str, str]], use_rag: bool, llm_url: str) -> Generator[str, None, None]:
-#     current_user_input = conversation_history[-1]["content"]
-#     context_message = {}
-#     try:
-#         if use_rag:
-#             index = pc.Index(host=p_host)
-
-#             results = index.search(
-#                 namespace="__default__", 
-#                 query={
-#                     "inputs": {"text": f"{current_user_input}"}, 
-#                     "top_k": 3
-#                 },
-#                 rerank={
-#                     "model": "bge-reranker-v2-m3",
-#                     "top_n": 2,
-#                     "rank_fields": ["content"]
-#                 },
-#                 fields=["title", "content"]
-#             )
-            
-#             contents = [hit['fields']['content'] for hit in results['result']['hits']]
-#             context_text = "\n\n".join(contents) #context from rag that the llm wil use to answer the question
-            
-#             if context_text:
-#                 #create new context message to prepend/insert
-#                 context_message = {
-#                     "role": "system",
-#                     "content": f"Refer to the following context if relevant: {context_text}"
-#                 }
-
-#             #prepare messages list for LLM API call
-#             #start with the original system prompt from conversation history
-#             messages_for_llm = [conversation_history[0]]  #the first message is the system prompt
-
-#             #add the RAG context prompt (context_message) after the original system prompt
-#             if context_message:
-#                 messages_for_llm.append(context_message)
-
-#             #add the rest of the conversation history (excluding the first system prompt)
-#             messages_for_llm.extend(conversation_history[1:])
-
-#             # messages_for_llm = list(conversation_history) #convert the conversation history to a list
-#             # original_system_prompt = messages_for_llm[0]["content"]
-#             # messages_for_llm[0]["content"] = (
-#             #     original_system_prompt + "\n\nIntegrate the following context into your response if relevant, but do not directly quote it unless necessary: " + context
-#             # )  #don't new system prompt details keep getting added to the base system prompt every time inference is made??????????????????????????
-
-
-#         else:
-#             # context = None
-#             messages_for_llm = list(conversation_history)
-        
-#         return communicate3.communicate(
-#             llm_key, 
-#             "https://openrouter.ai/api/v1/chat/completions", 
-#             messages_for_llm, 
-#             llm_url
-#         )
-   
-#     except Exception as e:
-#         print(f"Error in get_response: {e}")
-#         return f"Error: An issue occured retrieving information: {e}"
-
-
-#get_response.py uses communicate.py and returns the complete llm response to the user input.
+    
