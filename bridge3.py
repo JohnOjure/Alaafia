@@ -29,7 +29,7 @@ import get_response3
 
 load_dotenv()
 
-model_name = os.getenv("model_name") 
+model_name = os.getenv("model_name")
 ngrok_url = os.getenv("ngrok_url")
 open_ai_key = os.getenv("open_ai_key")
 # open_ai_key = os.getenv("open_ai_key")
