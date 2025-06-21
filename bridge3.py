@@ -32,14 +32,14 @@ load_dotenv()
 model_name = os.getenv("model_name")
 ngrok_url = os.getenv("ngrok_url")
 open_ai_key = os.getenv("open_ai_key")
-open_router_key = os.getenv("open_router_key")
+open_ai_key = os.getenv("open_ai_key")
 pinecone_key = os.getenv("pinecone_key")
 pinecone_host = os.getenv("pinecone_host")
 eleven_labs_key = os.getenv("eleven_labs_key")
 twilio_sid = os.getenv("twilio_sid")
 twilio_auth_token = os.getenv("twilio_auth_token")
 
-print(f"OpenRouter Key: {'*'*10}{open_router_key[-4:] if open_router_key else 'MISSING'}")
+print(f"OpenRouter Key: {'*'*10}{open_ai_key[-4:] if open_ai_key else 'MISSING'}")
 print(f"LLM URL: {model_name}")
 
 #dials
@@ -226,7 +226,7 @@ async def conversation_relay_websocket(websocket: WebSocket):
     #receives sst from twilio, pipes it to our llm then tts the response back to twilio
     call_sid: str = None
 
-    if not open_router_key:
+    if not open_ai_key:
         print("LLM key not in env file")
         await websocket.accept()
         await websocket.send_json({"type": "text", "text": "I'm so sorry, I cannot access my knowledge base. My API key is missing.", "last": True})
@@ -276,7 +276,7 @@ async def conversation_relay_websocket(websocket: WebSocket):
                     
                     llm_token_generator = await asyncio.to_thread(
                         get_response3.get_response,
-                        llm_key = open_router_key,
+                        llm_key = open_ai_key,
                         pc = pc,
                         p_host = pinecone_host,
                         conversation_history = manager.conversation_histories[call_sid],
@@ -410,7 +410,7 @@ async def parse_receipt(file: UploadFile = File(...)):
         # Call the new asynchronous helper function from get_response3.py
         llm_extraction_result = await get_response3.get_llm_extracted_receipt_data(
             raw_text=extracted_text,
-            llm_key=open_router_key, # Using your OpenRouter key for the LLM
+            llm_key=open_ai_key, # Using your OpenRouter key for the LLM
             model_name=model_name # Your OpenRouter base URL
         )
         
@@ -548,6 +548,7 @@ async def check_fraud(
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_with_psi(request: ChatRequest):
+    print("Received chat request from frontend.")
     """
     Allows a user to chat with Psi (your AI assistant) via a standard HTTP POST request.
     The frontend sends the current user message and the full conversation history.
@@ -569,7 +570,7 @@ async def chat_with_psi(request: ChatRequest):
     # Ensure the frontend correctly formats its history like:
     # [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, {"role": "user", "content": "How are you?"}]
 
-    # model_name = "gpt-4o"
+    # model_name = "gpt-4o" # You can make this configurable
     use_rag = True if pc else False # Only use RAG if Pinecone is successfully initialized
 
     full_psi_response = ""
@@ -578,8 +579,8 @@ async def chat_with_psi(request: ChatRequest):
         # to get the full response since we're not using WebSockets.
         # This means the API will wait until get_response yields its final output.
         async for chunk in get_response3.get_response(
-            llm_key=open_router_key,
-            Pinecone=pc,
+            llm_key=open_ai_key,
+            pc=pc,
             p_host=pinecone_host,
             conversation_history=conversation_history, # Pass history as provided by frontend
             use_rag=use_rag,
