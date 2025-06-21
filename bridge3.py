@@ -32,7 +32,7 @@ load_dotenv()
 model_name = os.getenv("model_name") 
 ngrok_url = os.getenv("ngrok_url")
 open_ai_key = os.getenv("open_ai_key")
-open_ai_key = os.getenv("open_ai_key")
+# open_ai_key = os.getenv("open_ai_key")
 pinecone_key = os.getenv("pinecone_key")
 pinecone_host = os.getenv("pinecone_host")
 eleven_labs_key = os.getenv("eleven_labs_key")
@@ -205,7 +205,7 @@ async def handle_incoming_call(request: Request):
 
     conversation_relay = connect.conversation_relay(
         url = full_websocket_url,
-        welcomeGreeting = "Hello there, I am Psi. How can I help you today?",
+        welcomeGreeting = "Hello there, I am Aisha. How can I help you today?",
         welcomeGreetingInterruptible = "speech", # ***
         language = "en-US",
         ttsProvider = "ElevenLabs",

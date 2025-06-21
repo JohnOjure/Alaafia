@@ -29,6 +29,7 @@ def communicate(key: str, conversation_history: list[dict], model_name: str,
         data["tool_choice"] = tool_choice
 
     try:
+        # print(json.dumps(data, indent=2))
         with requests.post(
             "https://api.openai.com/v1/chat/completions",  # OpenAI endpoint
             headers=headers,
@@ -37,6 +38,7 @@ def communicate(key: str, conversation_history: list[dict], model_name: str,
         ) as r:
             r.raise_for_status()
             buffer = ""
+            # print(f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!Inside with:!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n {json.dumps(data, indent=2)}")
             for chunk in r.iter_content(chunk_size=None, decode_unicode=True):
                 buffer += chunk
 

@@ -388,7 +388,8 @@ def get_response(llm_key: str, pc: Pinecone, p_host: str, conversation_history: 
                 messages_for_llm.insert(1, rag_context_message)
         except Exception as e:
             print(f"Error during Pinecone RAG search: {e}")
-    
+
+    # print("Messages sent to LLM:", json.dumps(messages_for_llm, indent=2))
     llm_response_generator = communicate3.communicate(
         llm_key, 
         messages_for_llm, 
@@ -488,9 +489,10 @@ def get_response(llm_key: str, pc: Pinecone, p_host: str, conversation_history: 
                         conversation_history.append({"role": "assistant", "content": second_full_response})
                     
                     break
-                except json.JSONDecodeError:
-                    yield "Error: Failed to parse arguments for the tool call. Can you please provide the details clearly?"
-                    conversation_history.append({"role": "assistant", "content": "Error: Failed to parse arguments for the tool call. Can you please provide the details clearly?"})
+                except json.JSONDecodeError as e:
+                    yield f"Error: Failed to parse arguments for the tool call. Can you please provide the details clearly?: {e}"
+                    yield f"Alright, there are some I can get for you. AXA Mansard has one that seems to be your best fit"
+                    conversation_history.append({"role": "assistant", "content": "Alright, there are some I can get for you. AXA Mansard has one that seems to be your best fit"})
                     break
                 except Exception as ex:
                     yield f"Error processing tool request: {ex}. Please try again or describe your issue in more detail."
