@@ -20,9 +20,7 @@ curacel_health_key = os.getenv("curacel_health_key")
 curacel_grow_key = os.getenv("curacel_grow_key")
 health_base_url = os.getenv("health_base_url")
 grow_base_url = os.getenv("grow_base_url")
-# url = "https://openrouter.ai/api/v1/chat/completions"
 
-#
 
 #define the tools the LLM can use
 CURACEL_TOOLS = [
@@ -220,8 +218,8 @@ def file_health_claim(
         for desc in service_items_descriptions:
             items_payload.append({
                 "description": desc,
-                "unit_price_billed": 0.0, #default for voice MVP
-                "qty": 1 #default for voice MVP
+                "unit_price_billed": 0.0, #default for voice mvp
+                "qty": 1 #default for voice mvp
             })
     else:
         items_payload.append({
@@ -243,15 +241,15 @@ def file_health_claim(
         },
         "description": claim_description, #this is the top-level claim description
         
-        # --- PLACEHOLDERS FOR HACKATHON ---
-        #these values would typically come from your Curacel integration setup (Insurer/Provider codes)
+        # PLACEHOLDERS FOR HACKATHON 
+        #these values would come from Curacel integration setup (Insurer/Provider codes)
         #or be determined by context.
         "hmo_code": "HACKATHON_HMO", #replace with actual HMO code
         "provider_code": "HACKATHON_PROVIDER", #replace with actual Provider code
-        # --- END PLACEHOLDERS ---
+        # END PLACEHOLDERS 
         
         "is_draft": True, #default to true for easy review in Curacel portal
-        "ref": str(uuid.uuid4()), # Generate a unique reference ID
+        "ref": str(uuid.uuid4()), #generate a unique reference ID
         "auto_vet": False,
         "create_missing_tariffs": False,
         "amount_billed": amount_billed,
@@ -368,9 +366,10 @@ async def get_response(llm_key: str, pc: Pinecone, p_host: str, conversation_his
     Yields dictionary chunks (text, tool_call, error, end).
     """
     current_user_input = conversation_history[-1]["content"]
-    messages_for_llm = list(conversation_history)
+    
+    messages_for_llm = list(conversation_history)  #make a mutable copy
 
-    # RAG Logic (omitted for brevity, assume it's correct from previous versions)
+    #rag logic
     if use_rag and current_user_input.strip():
         try:
             index = pc.Index(host=p_host)
@@ -405,10 +404,10 @@ async def get_response(llm_key: str, pc: Pinecone, p_host: str, conversation_his
         llm_key, 
         messages_for_llm, 
         model_name,
-        tools=CURACEL_TOOLS
+        tools=CURACEL_TOOLS 
     )
 
-    full_llm_response_content = ""
+    full_llm_response_content = ""  #to accumulate text response if any
     tool_call_made = False
 
     try:
@@ -416,21 +415,22 @@ async def get_response(llm_key: str, pc: Pinecone, p_host: str, conversation_his
             if chunk["type"] == "text":
                 token = chunk["token"]
                 full_llm_response_content += token
-                yield {"type": "text", "token": token}
+                yield token  
             elif chunk["type"] == "tool_call":
                 tool_call = chunk["tool_call"]
                 tool_call_made = True
 
                 function_name = tool_call["function"]["name"]
-                arguments_str = tool_call["function"]["arguments"]
-
+                arguments_str = tool_call["function"]["arguments"]  
+                
                 print(f"LLM requested tool call: {function_name} with args: {arguments_str}")
 
                 try:
                     arguments = json.loads(arguments_str)
-                    tool_output = ""
+                    tool_output = ""  
 
                     if function_name == "file_health_claim":
+                        #extract arguments for file_health_claim
                         claim_description = arguments.get("claim_description")
                         encounter_date = arguments.get("encounter_date")
                         enrollee_first_name = arguments.get("enrollee_first_name")
@@ -440,6 +440,7 @@ async def get_response(llm_key: str, pc: Pinecone, p_host: str, conversation_his
                         service_items_descriptions = arguments.get("service_items_descriptions", [])
                         amount_billed = arguments.get("amount_billed", 0.0)
 
+                        #call the actual API function
                         tool_output = file_health_claim(
                             claim_description=claim_description,
                             encounter_date=encounter_date,
@@ -452,10 +453,12 @@ async def get_response(llm_key: str, pc: Pinecone, p_host: str, conversation_his
                         )
 
                     elif function_name == "recommend_curacel_policy":
+                        #extract arguments for recommend_curacel_policy
                         insurance_type = arguments.get("insurance_type")
                         health_condition = arguments.get("health_condition")
                         country = arguments.get("country")
 
+                        #call the actual API function
                         tool_output = recommend_curacel_policy(
                             insurance_type=insurance_type,
                             health_condition=health_condition,
@@ -463,19 +466,21 @@ async def get_response(llm_key: str, pc: Pinecone, p_host: str, conversation_his
                         )
                     else:
                         tool_output = json.dumps({"status": "error", "message": f"Unknown tool: {function_name}"})
-
-                    messages_for_llm.append({
+                        
+                    #add tool call and tool output to conversation history
+                    conversation_history.append({
                         "role": "tool",
                         "tool_call_id": tool_call.get("id", "no_id"),
                         "name": function_name,
                         "content": tool_output
                     })
-
+                    
+                    #make another LLM call to get a natural language response
                     second_llm_response_generator = communicate3.communicate(
                         llm_key,
-                        messages_for_llm,
+                        conversation_history,  #use the updated history
                         model_name,
-                        tools=CURACEL_TOOLS
+                        tools=CURACEL_TOOLS  #still pass tools in case of chained calls
                     )
 
                     second_full_response = ""
@@ -495,9 +500,9 @@ async def get_response(llm_key: str, pc: Pinecone, p_host: str, conversation_his
                     
                     break
                 except json.JSONDecodeError as e:
-                    yield f"Error: Failed to parse arguments for the tool call. Can you please provide the details clearly?: {e}"
-                    yield f"Alright, there are some I can get for you. AXA Mansard has one that seems to be your best fit"
-                    conversation_history.append({"role": "assistant", "content": "Alright, there are some I can get for you. AXA Mansard has one that seems to be your best fit"})
+                    yield f"Oh no... I think i just encountered an error, could you please say that again?"
+                    conversation_history.append({"role": "assistant", "content": "Oh no... I think i just encountered an error, could you please say that again?"})
+                    print(f"Json decode error: {e}")
                     break
                 except Exception as ex:
                     yield {"type": "text", "token": f"Error processing tool request: {ex}. Please try again or describe your issue in more detail."}
@@ -511,8 +516,4 @@ async def get_response(llm_key: str, pc: Pinecone, p_host: str, conversation_his
         return
 
     if not tool_call_made and not full_llm_response_content:
-        yield {"type": "text", "token": "I'm sorry, I didn't get a clear response. Can you please rephrase?"}
-
-    yield {"type": "end"}
-
-    
+        yield "I'm sorry, I didn't get a clear response. Can you please rephrase?"

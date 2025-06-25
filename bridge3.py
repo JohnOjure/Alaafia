@@ -5,15 +5,10 @@ buh if you have any questions, lemme know.
 
 This file binds everything together and wraps the logic in an API
 
-[❗❗❗❗❗ To the frontend gang, alot of changes are still going on so link the
-frontend to this backend at your own risk ❗❗❗❗❗
-❗Lol, not at your own risk buh be careful and cautious cos you may have
-designed the frontend for one thing and the next moment the backend code would have changed completely❗]
-
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response, UploadFile, File, HTTPException, status #type: ignore
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.cors import CORSMiddleware #type: ignore
 from twilio.twiml.voice_response import VoiceResponse, Connect, ConversationRelay #type: ignore
 from pinecone import Pinecone # type: ignore
 from pydantic import BaseModel #type: ignore
@@ -26,6 +21,7 @@ import asyncio
 from dotenv import load_dotenv #type: ignore
 from datetime import datetime 
 import get_response3
+import get_response_frontend
 
 load_dotenv()
 
@@ -39,8 +35,8 @@ eleven_labs_key = os.getenv("eleven_labs_key")
 twilio_sid = os.getenv("twilio_sid")
 twilio_auth_token = os.getenv("twilio_auth_token")
 
-print(f"OpenRouter Key: {'*'*10}{open_ai_key[-4:] if open_ai_key else 'MISSING'}")
-print(f"LLM URL: {model_name}")
+print(f"OpenAI Key: {'*'*10}{open_ai_key[-4:] if open_ai_key else 'MISSING'}")
+print(f"Model Name: {model_name}")
 
 #dials
 index_name = "psi-index"
@@ -58,13 +54,13 @@ except Exception as e:
 
 app = FastAPI()
 
-# --- CORS Middleware (Crucial for frontend in different origin) ---
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins for development. CHANGE THIS FOR PRODUCTION!
+    allow_origins=["*"],  #alows all origins for development. CHANGE THIS FOR PRODUCTION!
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods (GET, POST, etc.)
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],  #allows all methods (GET, POST, etc.)
+    allow_headers=["*"],  #allows all headers
 )
 
 #conversation manager for Twilio and ConversationRelay vWebsockets
@@ -148,7 +144,7 @@ class ClaimDetails(BaseModel):
     diagnoses_names: List[str] = []
     service_items_descriptions: List[str] = []
     amount_billed: float = 0.0
-    # Add an optional field if clinic name is usually extracted from chat/user input
+    #add an optional field if clinic name is usually extracted from chat/user input
     clinic_name_from_chat: str = None
 
 #define the expected structure of data extracted from a receipt
@@ -167,18 +163,11 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     user_message: str
-    # conversation_history: List[ChatMessage] # You can send the full history
-    # Or keep it simpler by just sending user message and the backend manages full history
-    # For a simple HTTP endpoint, managing history per user will require a session ID
-    # or sending the entire history back and forth with each request.
-    # Let's start with passing full history, as get_response expects it.
     conversation_history: Optional[List[Dict[str, str]]] = []
 
 
 class ChatResponse(BaseModel):
     psi_response: str
-    # You might want to send back the updated conversation history here too
-    # updated_conversation_history: List[ChatMessage]
 
 
 manager = ConversationManager()
@@ -443,7 +432,7 @@ async def check_fraud(
     """
     discrepancies = []
 
-    # 1. Date Comparison
+    #date Comparison
     try:
         claim_date_dt = datetime.strptime(claim.encounter_date, "%Y-%m-%d")
         receipt_date_dt = datetime.strptime(receipt.receipt_date, "%Y-%m-%d")
@@ -466,7 +455,7 @@ async def check_fraud(
             "severity": "Error"
         })
 
-    # 2. Amount Comparison
+    #amount comparison
     #allow for a percentage tolerance (e.g., 5% difference)
     amount_tolerance_percent = 5.0
     if claim.amount_billed > 0 and receipt.total_amount > 0:
@@ -491,7 +480,7 @@ async def check_fraud(
                 })
 
 
-    # 3. Clinic Name Comparison (Basic string matching for MVP)
+    #clinic ame comparison (basic string matching for mvp)
     #this is a simple exact match. For a real system, you'd use fuzzy matching
     #libraries (like 'fuzzywuzzy' or 'rapidfuzz') for variations like "Faith Clinic Inc." vs "Faith Clinic".
     if claim.clinic_name_from_chat and receipt.clinic_name:
@@ -515,9 +504,9 @@ async def check_fraud(
                 "severity": "Low"
             })
 
-    # 4. Service Items Comparison (Conceptual for MVP)
-    # This is complex and would involve NLP similarity or matching against a known service list.
-    # For MVP, we can just note if either is empty when the other is not.
+    #service items comparison (conceptual for mvp)
+    #this is complex and would involve nlp similarity or matching against a known service list.
+    #for mvp, we can just note if either is empty when the other is not.
     if claim.service_items_descriptions and not receipt.service_items:
         discrepancies.append({
             "type": "Service Items Mismatch",
@@ -530,9 +519,9 @@ async def check_fraud(
             "message": "Service items found on receipt but not specified in claim/chat.",
             "severity": "Low"
         })
-    # More advanced: Check for overlap or significant differences in actual item descriptions
-    # For instance: If "malaria test" is in claim services, is "malaria test" or similar in receipt services?
-    # This would require more sophisticated string/semantic similarity algorithms.
+    #more advanced: check for overlap or significant differences in actual item descriptions
+    #for instance: if "malaria test" is in claim services, is "malaria test" or similar in receipt services?
+    #this would require more sophisticated string/semantic similarity algorithms.
 
     if not discrepancies:
         return {
@@ -550,7 +539,7 @@ async def check_fraud(
 async def chat_with_psi(request: ChatRequest):
     print("Received chat request from frontend.")
     """
-    Allows a user to chat with Psi (your AI assistant) via a standard HTTP POST request.
+    Allows a user to chat with AiSHA via a standard HTTP POST request.
     The frontend sends the current user message and the full conversation history.
     Psi processes the request, potentially uses RAG or tools, and returns a complete text response.
     """
@@ -563,21 +552,21 @@ async def chat_with_psi(request: ChatRequest):
             detail="User message cannot be empty."
         )
 
-    # Add the current user message to the history for this turn's processing
-    # Note: get_response expects "user" and "assistant" roles.
-    # The history sent from frontend should already include the user's latest message.
-    # So, we just use the history as provided by the frontend.
-    # Ensure the frontend correctly formats its history like:
-    # [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, {"role": "user", "content": "How are you?"}]
+    #add the current user message to the history for this turn's processing
+    #note: get_response expects "user" and "assistant" roles.
+    #the history sent from frontend should already include the user's latest message.
+    #so, we just use the history as provided by the frontend.
+    #ensure the frontend correctly formats its history like:
+    #[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, {"role": "user", "content": "How are you?"}]
 
-    # model_name = "gpt-4o" # You can make this configurable
-    use_rag = True if pc else False # Only use RAG if Pinecone is successfully initialized
+    # model_name = "gpt-4o"
+    use_rag = True if pc else False #only use rag if pinecone is successfully initialized
 
     full_psi_response = ""
     try:
-        # get_response is an async generator. We need to iterate through it
-        # to get the full response since we're not using WebSockets.
-        # This means the API will wait until get_response yields its final output.
+        #get_response is an async generator. We need to iterate through it
+        #to get the full response since we're not using WebSockets.
+        #this means the API will wait until get_response yields its final output.
         async for chunk in get_response3.get_response(
             llm_key=open_ai_key,
             pc=pc,
@@ -589,9 +578,9 @@ async def chat_with_psi(request: ChatRequest):
             if chunk["type"] == "text":
                 full_psi_response += chunk["token"]
             elif chunk["type"] == "tool_call":
-                # If a tool call occurs, get_response handles it internally
-                # and makes a second LLM call. The final text will then follow.
-                # We can log this on the backend if needed.
+                #if a tool call occurs, get_response handles it internally
+                #and makes a second LLM call. The final text will then follow.
+                #we can log this on the backend if needed.
                 print(f"Backend: Psi initiated tool call: {chunk['function_name']} with args: {chunk['arguments']}")
             elif chunk["type"] == "error":
                 error_detail = chunk.get("message", "An unknown error occurred during Psi's response.")
@@ -601,10 +590,8 @@ async def chat_with_psi(request: ChatRequest):
                     detail=f"Psi encountered an error: {error_detail}"
                 )
             elif chunk["type"] == "end":
-                # The generator signals completion
                 break
     except HTTPException:
-        # Re-raise HTTPExceptions raised within the loop
         raise
     except Exception as e:
         print(f"Unhandled error during Psi response generation: {e}")
@@ -619,5 +606,39 @@ async def chat_with_psi(request: ChatRequest):
     # After getting the full response, return it
     # The frontend will be responsible for adding this response to its history
    
+@app.post("/chat-aisha", response_model = ChatResponse)
+async def chat_with_aisha(request: ChatRequest):
+    print("Received a request to chat with AiSHA from the frontend")
 
+    user_message = request.user_message
+    conversation_history = request.conversation_history # Frontend sends the accumulated history
+    print(f"The user's message from the frontend: {user_message}\n\nThe conversation history: {conversation_history}")
+    
+    if not user_message.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User message cannot be empty."
+        )
+    
+    try:
+        aisha_response = get_response_frontend.get_response_frontend(
+            llm_key=open_ai_key,
+            pc=pc,
+            p_host=pinecone_host,
+            conversation_history=conversation_history, # Pass history as provided by frontend
+            user_message=user_message,
+            use_rag=use_rag,
+            model_name=model_name
+        )
 
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Unhandled error during Psi response generation: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected server error occurred: {e}"
+        )
+    #after getting the full response, return it
+    #the frontend will be responsible for adding this response to its history
+    return ChatResponse(psi_response=aisha_response)

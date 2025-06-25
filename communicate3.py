@@ -2,7 +2,7 @@
 import os
 import requests #type: ignore
 import json
-from typing import Optional, List, Dict, Any # Import necessary types
+from typing import Optional, List, Dict, Any
 
 def communicate(key: str, conversation_history: list[dict], model_name: str,
                 tools: Optional[List[Dict[str, Any]]] = None,
@@ -22,7 +22,7 @@ def communicate(key: str, conversation_history: list[dict], model_name: str,
         "messages": conversation_history
     }
 
-    # Add tools and tool_choice to the data payload if provided
+    #add tools and tool_choice to the data payload if provided
     if tools is not None:
         data["tools"] = tools
     if tool_choice is not None:
@@ -31,7 +31,7 @@ def communicate(key: str, conversation_history: list[dict], model_name: str,
     try:
         # print(json.dumps(data, indent=2))
         with requests.post(
-            "https://api.openai.com/v1/chat/completions",  # OpenAI endpoint
+            "https://api.openai.com/v1/chat/completions",
             headers=headers,
             json=data,
             stream=True
@@ -57,7 +57,7 @@ def communicate(key: str, conversation_history: list[dict], model_name: str,
                             if choices and isinstance(choices, list) and len(choices) > 0:
                                 delta = choices[0].get("delta", {})
 
-                                # Handle tool calls (OpenAI format)
+                                #handle tool calls
                                 if "tool_calls" in delta:
                                     for tc in delta["tool_calls"]:
                                         if tc.get("type") == "function":
@@ -72,7 +72,6 @@ def communicate(key: str, conversation_history: list[dict], model_name: str,
                                                 }
                                             }
 
-                                # Handle text content
                                 if "content" in delta:
                                     yield {"type": "text", "token": delta["content"]}
                         except json.JSONDecodeError:
